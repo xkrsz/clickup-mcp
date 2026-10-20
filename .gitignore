@@ -1,0 +1,6 @@
+node_modules/
+.wrangler/
+.dev.vars
+dist/
+# Your own deploy config (account, custom domain, KV id). `npm run deploy` uses it when present.
+wrangler.local.jsonc

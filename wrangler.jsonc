@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "clickup-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-30",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "workers_dev": true,
+  // OAuth grants, clients and consent state. Secrets and tokens are stored hashed; grant props are encrypted.
+  // With no "id", `wrangler deploy` creates the namespace on first deploy.
+  "kv_namespaces": [{ "binding": "OAUTH_KV" }],
+  "observability": {
+    "enabled": true,
+    // Invocation logs record request URLs, which can carry ?token=. Keep only console output.
+    "logs": { "invocation_logs": false }
+  }
+}

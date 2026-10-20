@@ -1,0 +1,33 @@
+{
+  "name": "clickup-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "^1.2.1",
+    "@modelcontextprotocol/client": "^2.2.0",
+    "@modelcontextprotocol/server": "^2.2.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261001.1",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^26.6.3",
+    "js-yaml": "^5.4.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3",
+    "wrangler": "^4.145.0"
+  },
+  "description": "Remote MCP server for the full ClickUp REST API (v2 + v3), deployed as a Cloudflare Worker.",
+  "scripts": {
+    "spec:update": "curl -fsSL -o spec/clickup-v2.json https://developer.clickup.com/openapi/clickup-api-v2-reference.json && curl -fsSL -o spec/clickup-v3.yaml https://developer.clickup.com/openapi/ClickUp_PUBLIC_API_V3.yaml",
+    "generate": "node scripts/generate.mjs",
+    "dev": "npm run generate && wrangler dev",
+    "deploy": "npm run generate && wrangler deploy $(test -f wrangler.local.jsonc && echo --config wrangler.local.jsonc)",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run generate && vitest run",
+    "check": "npm run typecheck && npm test",
+    "test:routes": "CLICKUP_PROBE=1 vitest run test/routes.live.test.ts"
+  },
+  "license": "MIT"
+}
