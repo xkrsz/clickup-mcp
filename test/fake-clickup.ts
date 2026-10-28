@@ -7,12 +7,18 @@ export interface RecordedRequest {
 
 type Handler = (req: RecordedRequest) => Response | Promise<Response> | undefined;
 
+/** What api.clickup.com answers when given a token from the official MCP's OAuth server. */
+export function oauthTokenNotFound(): Response {
+  return Response.json({ err: 'Oauth token not found', ECODE: 'OAUTH_019' }, { status: 401 });
+}
+
 /** A fetch stand-in for api.clickup.com that records every request. */
 export function fakeClickUp(handler: Handler = () => undefined) {
   const requests: RecordedRequest[] = [];
   const fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
-    const body = init?.body instanceof FormData ? init.body : typeof init?.body === 'string' ? init.body : null;
+    const raw = init?.body;
+    const body = raw instanceof FormData ? raw : typeof raw === 'string' ? raw : raw instanceof URLSearchParams ? raw.toString() : null;
     const req: RecordedRequest = { method: init?.method ?? 'GET', url, headers: new Headers(init?.headers), body };
     requests.push(req);
     const custom = await handler(req);

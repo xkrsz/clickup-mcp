@@ -44,6 +44,8 @@ Then run `/mcp` inside Claude Code and pick `clickup` to sign in.
 
 `mode=compact` keeps the tool list short for apps that cap the number of tools (Cursor does). See [URL options](#url-options).
 
+Signing in gives you ClickUp's official MCP tools. ClickUp's REST API doesn't accept that sign-in, so the REST-backed tools need a personal token as well (below) or a [REST OAuth app](#optional-clickup-rest-oauth-app) on the server. See [When ClickUp's REST API refuses the sign-in](#when-clickups-rest-api-refuses-the-sign-in).
+
 ### Using a personal API token instead of signing in
 
 For apps without OAuth sign-in, or for scripts. In ClickUp open **Settings → Apps → API Token** and copy the token that starts with `pk_`. Every REST tool works this way. The tools passed through to ClickUp's official server don't, because that server only accepts its own sign-in.
@@ -68,7 +70,7 @@ Apps that can't set headers can use `https://clickupmcp.k22i.com/mcp?token=pk_YO
 
 ### What the hosted server stores
 
-Your ClickUp sign-in token is kept encrypted in Cloudflare KV, and only the token your AI app holds can decrypt it. Request URLs aren't logged, because they can contain `?token=`. Your ClickUp data passes through the Worker on its way to your AI app. If you'd rather it pass through your own infrastructure, [self-host](#self-host).
+Your ClickUp sign-in token is kept encrypted in Cloudflare KV, and only the token your AI app holds can decrypt it. Whether ClickUp's REST API accepts that token is cached for a day under a SHA-256 hash of it. Request URLs aren't logged, because they can contain `?token=`. Your ClickUp data passes through the Worker on its way to your AI app. If you'd rather it pass through your own infrastructure, [self-host](#self-host).
 
 ## URL options
 
@@ -108,6 +110,32 @@ Some features exist only in ClickUp's official MCP server, with no public REST e
 
 The pass-through list comes from the official server's live `tools/list` minus the tools in `COVERED_BY_REST` (`src/official.ts`), so new official-only tools show up without a deploy.
 
+### When ClickUp's REST API refuses the sign-in
+
+ClickUp's REST API doesn't accept tokens from the official MCP's sign-in. It answers `401 {"err":"Oauth token not found","ECODE":"OAUTH_019"}`. So on a connection that signed in, with no personal token and no [REST OAuth app](#optional-clickup-rest-oauth-app), every REST-backed tool would fail. The server checks once per token with `GET /api/v2/user` (at sign-in, or on the first request for older grants) and caches the answer for 24 hours. When REST says no, `tools/list` returns the official server's tools instead of the REST-backed ones, in every mode (`mode=compact` too, since the official list is short; `toolsets` doesn't apply). `readonly=1` still filters writes. The legacy alias `clickup_create_task_comment` stays out of the list but still works.
+
+Calls to REST tool names from a list pinned before the switch go to the official tool of the same name, with `body` fields moved to the top level. Other REST names return an error that names the official replacement. Here's how the REST tools map:
+
+| Job | REST tool (personal token or REST OAuth) | Official tool (sign-in only) |
+| --- | --- | --- |
+| Tasks | `clickup_create_task`, `clickup_get_task`, `clickup_update_task`, `clickup_delete_task`, `clickup_move_task`, `clickup_merge_tasks`, `clickup_add_task_to_list`, `clickup_remove_task_from_list` | Same names |
+| Find tasks | `clickup_search_tasks`, `clickup_get_tasks`, `clickup_get_workspace_tasks`, `clickup_get_view_tasks` | `clickup_search`, `clickup_filter_tasks` |
+| Task links | `clickup_add_task_link`, `clickup_delete_task_link` | `clickup_add_task_link`, `clickup_remove_task_link` |
+| Dependencies | `clickup_add_dependency`, `clickup_delete_dependency` | `clickup_add_task_dependency`, `clickup_remove_task_dependency` |
+| Tags | `clickup_add_tag_to_task`, `clickup_remove_tag_from_task`, `clickup_create_space_tag` | Same names |
+| Comments | `clickup_create_task_comment`, `clickup_create_list_comment`, `clickup_create_threaded_comment`, `clickup_get_task_comments`, `clickup_get_threaded_comments`, `clickup_update_comment`, `clickup_delete_comment` | `clickup_create_comment`, then the same names |
+| People | `clickup_find_members`, `clickup_get_workspace_user`, `clickup_get_list_members`, `clickup_get_task_members`, `clickup_get_authorized_user` | `clickup_find_member_by_name`, `clickup_get_workspace_members`, `clickup_resolve_assignees`, `clickup_get_user` |
+| Hierarchy | `clickup_get_workspace_hierarchy`, `clickup_get_spaces`, `clickup_get_folders`, `clickup_get_lists`, `clickup_get_folder`, `clickup_get_list` | `clickup_get_workspace_hierarchy`, `clickup_get_folder`, `clickup_get_list` |
+| Lists and Folders | `clickup_create_folderless_list`, `clickup_create_list` (in a Folder), `clickup_update_list`, `clickup_create_folder`, `clickup_update_folder` | `clickup_create_list` (in a Space), `clickup_create_list_in_folder`, then the same names |
+| Custom fields | `clickup_get_list_custom_fields` and the folder, space and workspace variants | `clickup_get_custom_fields` |
+| Time | `clickup_create_time_entry`, `clickup_start_time_entry`, `clickup_stop_time_entry`, `clickup_get_running_time_entry`, `clickup_get_time_entries`, `clickup_get_task_time_in_status`, `clickup_get_bulk_tasks_time_in_status` | `clickup_add_time_entry`, `clickup_start_time_tracking`, `clickup_stop_time_tracking`, `clickup_get_current_time_entry`, then the same names |
+| Attachments | `clickup_create_task_attachment` | `clickup_attach_task_file`, `clickup_request_attachment_upload` |
+| Docs | `clickup_create_doc`, `clickup_get_doc_page_listing`, `clickup_get_doc_pages`, `clickup_create_doc_page`, `clickup_edit_doc_page`, `clickup_search_docs` | `clickup_create_document`, `clickup_list_document_pages`, `clickup_get_document_pages`, `clickup_create_document_page`, `clickup_update_document_page`, `clickup_search` |
+| Chat | `clickup_get_chat_channels`, `clickup_get_chat_messages`, `clickup_get_chat_message_replies`, `clickup_create_chat_message`, `clickup_create_chat_reply`, `clickup_update_chat_message`, reactions | `clickup_get_chat_channels`, `clickup_get_chat_channel_messages`, `clickup_get_chat_message_replies`, `clickup_send_chat_message`, `clickup_update_chat_message`, `clickup_react_to_chat_message` |
+| Views, statuses, bulk task changes, archiving, forms, creating custom fields | View tools, `clickup_update_space`, `clickup_api_request` | `clickup_execute_operator` (list the operations with `clickup_get_operators`) |
+
+Nothing official covers checklists, goals, webhooks, guests and invites, user groups, templates, deleting Spaces, Folders or Lists, editing or deleting time entries, custom roles and task types, plan and seats, audit logs, ACLs, the shared hierarchy, or raw `clickup_api_request` calls. For those, the connection needs a token REST accepts: a personal token on the URL (`?token=pk_...`, which takes over all REST calls) or the REST OAuth app below.
+
 ## Self-host
 
 You need Node.js 22 or newer and a Cloudflare account. The free Workers plan is enough.
@@ -132,6 +160,21 @@ The server works without it. It just shows the consent screen every time.
 
 Nothing else needs configuring. The Worker registers itself with ClickUp's OAuth server on first sign-in (dynamic client registration), so there's no ClickUp app to create and no client secret to manage. OAuth tokens are bound to whichever hostname the request came in on, so workers.dev and custom domains both work.
 
+### Optional: ClickUp REST OAuth app
+
+Without it, signed-in connections get [the official tools only](#when-clickups-rest-api-refuses-the-sign-in). With it, sign-in continues to ClickUp's own OAuth screen after the official one, and the REST tools work too.
+
+1. In ClickUp (as a Workspace owner or admin) open **Settings → Apps → Create new app**.
+2. Set the redirect URL to `https://<your-host>/oauth/callback/rest`, for example `https://clickupmcp.k22i.com/oauth/callback/rest`.
+3. Store the client ID and secret:
+   ```sh
+   npx wrangler secret put CLICKUP_CLIENT_ID
+   npx wrangler secret put CLICKUP_CLIENT_SECRET
+   ```
+   Add `--config wrangler.local.jsonc` if you deploy with one.
+
+People then pick workspaces twice: once for the official MCP, once for the REST app. Declining the second screen still finishes the sign-in, with the official tools only. Existing connections keep their old grant until they reconnect. ClickUp's REST OAuth tokens don't expire, but the grant still ends when the official token does.
+
 ### Custom domain, or a specific Cloudflare account
 
 Keep deployment-specific settings out of the committed `wrangler.jsonc` by copying it to `wrangler.local.jsonc` (gitignored). `npm run deploy` uses that file when it exists.
@@ -155,7 +198,7 @@ The domain has to be a zone on the same Cloudflare account.
 - File uploads (`clickup_create_task_attachment`, `clickup_create_entity_attachment`) take `filename` plus one of `file_base64`, `file_text` or `file_url`.
 - 429s are retried using ClickUp's rate-limit reset header. GET 5xx responses are retried. Writes are never retried after a 5xx.
 - Transport is Streamable HTTP on MCP revision 2026-07-28 (stateless, `server/discover`, no sessions) via `createMcpHandler` from `@modelcontextprotocol/server` 2.x. 2025-era clients that still send `initialize` get the SDK's stateless fallback.
-- Sign-in: the Worker is an OAuth 2.1 authorization server (`@cloudflare/workers-oauth-provider`, with dynamic client registration and client ID metadata documents). Its consent page sends you to the OAuth server of ClickUp's official MCP as a public client with PKCE. The ClickUp token it gets back is stored encrypted in the grant's props in KV, and only the MCP client's token can decrypt it. That token calls the official MCP server and, as a Bearer token, the REST API. If ClickUp ever refuses it on REST, append `?token=pk_...` and REST tools use the personal token instead.
+- Sign-in: the Worker is an OAuth 2.1 authorization server (`@cloudflare/workers-oauth-provider`, with dynamic client registration and client ID metadata documents). Its consent page sends you to the OAuth server of ClickUp's official MCP as a public client with PKCE. The ClickUp token it gets back is stored encrypted in the grant's props in KV, and only the MCP client's token can decrypt it. That token calls the official MCP server. ClickUp's REST API refuses it, so REST tools use, in order: a personal token on the URL or `X-ClickUp-Token` header, the token from the [REST OAuth app](#optional-clickup-rest-oauth-app) when one is configured, or nothing, in which case the official tools replace them (`src/rest-access.ts`).
 - Worker invocation logs are off because request URLs can contain `?token=`.
 
 ## Development

@@ -1,20 +1,36 @@
 // OAuth sign-in. MCP clients authorize against this Worker; the Worker asks for consent, then
 // signs the user in through the OAuth server of ClickUp's official MCP (mcp.clickup.com) and keeps
-// that token, encrypted, in the grant's props. The token calls both the official MCP server and,
-// as a Bearer token, the REST API.
-import { AuthorizationError, authorizationErrorRedirect, CimdFetchError, type ConsentDescription, type OAuthHelpers } from '@cloudflare/workers-oauth-provider';
+// that token, encrypted, in the grant's props. The token calls the official MCP server. ClickUp's
+// REST API refuses it (401 OAUTH_019), so when the Worker has a ClickUp REST OAuth app configured
+// (CLICKUP_CLIENT_ID and CLICKUP_CLIENT_SECRET), a second sign-in at app.clickup.com follows and its
+// token goes in the grant for the REST tools. Without one, the official tools stand in for REST.
+import {
+  AuthorizationError,
+  authorizationErrorRedirect,
+  CimdFetchError,
+  type AuthRequest,
+  type ConsentDescription,
+  type OAuthHelpers,
+} from '@cloudflare/workers-oauth-provider';
+import { API_ORIGIN } from './clickup';
 import { escapeHtml, page } from './html';
+import { classifyRestResponse, rememberRestAccess } from './rest-access';
 
 export const UPSTREAM_ISSUER = 'https://mcp.clickup.com';
 const UPSTREAM_RESOURCE = 'https://mcp.clickup.com';
 const UPSTREAM_SCOPE = 'read write';
 export const CALLBACK_PATH = '/oauth/callback';
+export const REST_CALLBACK_PATH = '/oauth/callback/rest';
+const REST_AUTHORIZE_URL = 'https://app.clickup.com/api';
 
 export interface Env {
   OAUTH_KV: KVNamespace;
   OAUTH_PROVIDER: OAuthHelpers;
   /** 32+ random characters; signs the remembered-consent cookie. */
   CONSENT_SECRET?: string;
+  /** Optional ClickUp REST OAuth app (ClickUp Settings > Apps > Create new app). Both or neither. */
+  CLICKUP_CLIENT_ID?: string;
+  CLICKUP_CLIENT_SECRET?: string;
 }
 
 export interface GrantProps {
@@ -23,6 +39,8 @@ export interface GrantProps {
   /** Epoch ms when that token expires, when ClickUp said. */
   clickupTokenExpiresAt?: number;
   clickupUser?: { id: number | string; username?: string; email?: string };
+  /** Access token from ClickUp's REST OAuth app, when one is configured. REST accepts it; it doesn't expire. */
+  restToken?: string;
 }
 
 interface UpstreamClient {
@@ -31,6 +49,17 @@ interface UpstreamClient {
 
 interface Pending {
   verifier: string;
+}
+
+/** Saved between the official sign-in and the REST one. Encrypted in KV by the provider. */
+interface PendingRest {
+  props: GrantProps;
+}
+
+function restApp(env: Env): { clientId: string; clientSecret: string } | undefined {
+  return env.CLICKUP_CLIENT_ID && env.CLICKUP_CLIENT_SECRET
+    ? { clientId: env.CLICKUP_CLIENT_ID, clientSecret: env.CLICKUP_CLIENT_SECRET }
+    : undefined;
 }
 
 function remember(env: Env) {
@@ -198,17 +227,17 @@ export async function handleCallback(request: Request, env: Env, doFetch: typeof
   const token = (await tokenResponse.json()) as { access_token?: string; expires_in?: number };
   if (!token.access_token) return errorPage('ClickUp did not issue a token.', 502);
 
-  // Identify the user for the grant. If the REST API refuses this token, the grant still works for
-  // the official MCP tools; REST tools then need a personal token on the URL.
+  // Identify the user and learn whether REST takes this token, which decides the tool list. The
+  // answer is cached so MCP requests don't probe again.
   let user: GrantProps['clickupUser'];
+  let restAccepted = false;
   try {
-    const me = await doFetch('https://api.clickup.com/api/v2/user', { headers: { Authorization: `Bearer ${token.access_token}` } });
-    if (me.ok) {
-      const body = (await me.json()) as { user?: { id: number; username?: string; email?: string } };
-      if (body.user) user = { id: body.user.id, username: body.user.username, email: body.user.email };
-    } else {
-      console.warn('REST API rejected the MCP OAuth token', me.status);
-    }
+    const me = await doFetch(`${API_ORIGIN}/api/v2/user`, { headers: { Authorization: `Bearer ${token.access_token}` } });
+    const access = classifyRestResponse(me.status);
+    if (access) await rememberRestAccess(env.OAUTH_KV, token.access_token, access);
+    restAccepted = access === 'accepted';
+    if (me.ok) user = await userFrom(me);
+    else await me.body?.cancel();
   } catch {
     // Network trouble here shouldn't block sign-in.
   }
@@ -218,6 +247,29 @@ export async function handleCallback(request: Request, env: Env, doFetch: typeof
     clickupTokenExpiresAt: token.expires_in ? Date.now() + token.expires_in * 1000 : undefined,
     clickupUser: user,
   };
+  const app = restApp(env);
+  if (app && !restAccepted) {
+    // Second hop: ClickUp's REST OAuth, so the REST tools get a token REST accepts.
+    const next = await oauth.beginUpstream(original, { data: { props } satisfies PendingRest, headers });
+    const url = new URL(REST_AUTHORIZE_URL);
+    url.search = new URLSearchParams({
+      client_id: app.clientId,
+      redirect_uri: new URL(REST_CALLBACK_PATH, request.url).toString(),
+      state: next.state,
+    }).toString();
+    next.headers.set('Location', url.toString());
+    return new Response(null, { status: 302, headers: next.headers });
+  }
+  return complete(oauth, original, props, headers);
+}
+
+async function userFrom(response: Response): Promise<GrantProps['clickupUser']> {
+  const body = (await response.json()) as { user?: { id: number; username?: string; email?: string } };
+  return body.user ? { id: body.user.id, username: body.user.username, email: body.user.email } : undefined;
+}
+
+async function complete(oauth: OAuthHelpers, original: AuthRequest, props: GrantProps, headers: Headers): Promise<Response> {
+  const user = props.clickupUser;
   const { redirectTo } = await oauth.completeAuthorization({
     request: original,
     userId: user ? String(user.id) : `anon-${crypto.randomUUID()}`,
@@ -227,4 +279,46 @@ export async function handleCallback(request: Request, env: Env, doFetch: typeof
   });
   headers.set('Location', redirectTo);
   return new Response(null, { status: 302, headers });
+}
+
+/**
+ * Return from ClickUp's REST OAuth. Whatever happens here the sign-in completes: without a REST
+ * token the connection still has the official tools.
+ */
+export async function handleRestCallback(request: Request, env: Env, doFetch: typeof fetch = fetch): Promise<Response> {
+  const oauth = env.OAUTH_PROVIDER;
+  let resumed;
+  try {
+    resumed = await oauth.finishUpstream<PendingRest>(request);
+  } catch (error) {
+    if (error instanceof AuthorizationError) return errorPage(error.description);
+    throw error;
+  }
+  const { request: original, data, headers } = resumed;
+  const props = { ...data.props };
+  const code = new URL(request.url).searchParams.get('code');
+  const app = restApp(env);
+  if (code && app) {
+    try {
+      const response = await doFetch(`${API_ORIGIN}/api/v2/oauth/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+        body: new URLSearchParams({ client_id: app.clientId, client_secret: app.clientSecret, code }),
+      });
+      const body = response.ok ? ((await response.json()) as { access_token?: string }) : undefined;
+      if (body?.access_token) {
+        props.restToken = body.access_token;
+        await rememberRestAccess(env.OAUTH_KV, body.access_token, 'accepted');
+        if (!props.clickupUser) {
+          const me = await doFetch(`${API_ORIGIN}/api/v2/user`, { headers: { Authorization: `Bearer ${body.access_token}` } });
+          if (me.ok) props.clickupUser = await userFrom(me);
+        }
+      } else {
+        console.warn('REST token exchange failed', response.status);
+      }
+    } catch (error) {
+      console.warn('REST token exchange failed', error instanceof Error ? error.message : error);
+    }
+  }
+  return complete(oauth, original, props, headers);
 }

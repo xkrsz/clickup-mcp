@@ -1,13 +1,16 @@
 import { OAuthError, OAuthProvider, type TokenExchangeCallbackOptions } from '@cloudflare/workers-oauth-provider';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import { landingPage } from './landing';
-import { CALLBACK_PATH, handleAuthorize, handleCallback, type Env, type GrantProps } from './oauth';
+import { CALLBACK_PATH, handleAuthorize, handleCallback, handleRestCallback, REST_CALLBACK_PATH, type Env, type GrantProps } from './oauth';
 import { toolsets } from './operations';
-import { configFromRequest, directToken } from './config';
+import { configFromRequest, directToken, resolveConfig } from './config';
 import { createServer, listTools, SERVER_VERSION } from './server';
 
 const mcp = createMcpHandler(
-  ({ requestInfo, authInfo }) => createServer(configFromRequest(requestInfo!, authInfo?.extra?.grant as GrantProps | undefined)),
+  async ({ requestInfo, authInfo }) =>
+    createServer(
+      await resolveConfig(requestInfo!, authInfo?.extra?.grant as GrantProps | undefined, authInfo?.extra?.kv as KVNamespace | undefined),
+    ),
   { onerror: (error) => console.error('mcp error', error.message) },
 );
 
@@ -26,8 +29,10 @@ function withCors(response: Response): Response {
   return out;
 }
 
-async function serveMcp(request: Request, grant?: GrantProps): Promise<Response> {
-  return withCors(await mcp.fetch(request, grant ? { authInfo: { token: 'oauth', clientId: 'oauth', scopes: [], extra: { grant } } } : undefined));
+async function serveMcp(request: Request, grant?: GrantProps, kv?: KVNamespace): Promise<Response> {
+  return withCors(
+    await mcp.fetch(request, grant ? { authInfo: { token: 'oauth', clientId: 'oauth', scopes: [], extra: { grant, kv } } } : undefined),
+  );
 }
 
 const isMcpPath = (path: string) => path === '/mcp' || path === '/mcp/';
@@ -52,7 +57,7 @@ function providerFor(origin: string): OAuthProvider<Env> {
     provider = new OAuthProvider<Env>({
       apiRoute: '/mcp',
       apiHandler: {
-        fetch: (request, _env, ctx) => serveMcp(request, (ctx as ExecutionContext<GrantProps>).props),
+        fetch: (request, env, ctx) => serveMcp(request, (ctx as ExecutionContext<GrantProps>).props, env.OAUTH_KV),
       },
       defaultHandler: {
         fetch: (request, env) => routes(request, env),
@@ -77,6 +82,7 @@ async function routes(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === '/authorize') return handleAuthorize(request, env);
   if (url.pathname === CALLBACK_PATH) return handleCallback(request, env);
+  if (url.pathname === REST_CALLBACK_PATH) return handleRestCallback(request, env);
   if (request.method !== 'GET' && request.method !== 'HEAD') return new Response('Not found', { status: 404 });
   if (url.pathname === '/') {
     return new Response(landingPage(url.origin, listTools({ mode: 'full', readonly: false }).length, toolsets), {

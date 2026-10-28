@@ -27,6 +27,41 @@ export function fakeOfficial() {
           name: 'clickup_get_task',
           description: 'Covered by REST here; must not be passed through.',
           inputSchema: { type: 'object', properties: { task_id: { type: 'string' } } },
+          annotations: { readOnlyHint: true },
+        },
+        // Official twins of REST-backed tools, listed only when REST refuses the token.
+        {
+          name: 'clickup_create_task',
+          description: 'Official: create a task.',
+          inputSchema: { type: 'object', properties: { name: { type: 'string' }, list_id: { type: 'string' } }, required: ['name', 'list_id'] },
+        },
+        {
+          name: 'clickup_add_task_link',
+          description: 'Official: link two tasks.',
+          inputSchema: { type: 'object', properties: { task_id: { type: 'string' }, links_to: { type: 'string' } }, required: ['task_id', 'links_to'] },
+        },
+        {
+          name: 'clickup_filter_tasks',
+          description: 'Official: filter tasks.',
+          inputSchema: { type: 'object', properties: { statuses: { type: 'array', items: { type: 'string' } } } },
+          annotations: { readOnlyHint: true },
+        },
+        {
+          name: 'clickup_find_member_by_name',
+          description: 'Official: find a member.',
+          inputSchema: { type: 'object', properties: { name_or_email: { type: 'string' } }, required: ['name_or_email'] },
+          annotations: { readOnlyHint: true },
+        },
+        {
+          name: 'clickup_get_workspace_hierarchy',
+          description: 'Official: the workspace tree.',
+          inputSchema: { type: 'object', properties: { workspace_id: { type: 'string' } } },
+          annotations: { readOnlyHint: true },
+        },
+        {
+          name: 'clickup_create_task_comment',
+          description: 'Official legacy alias of clickup_create_comment.',
+          inputSchema: { type: 'object', properties: { task_id: { type: 'string' }, comment_text: { type: 'string' } } },
         },
       ] as never,
     }));

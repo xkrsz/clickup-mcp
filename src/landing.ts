@@ -19,7 +19,7 @@ export function landingPage(origin: string, toolCount: number, toolsets: string[
   <p class="endpoint"><code>${escape(endpoint)}</code></p>
 
   <h2>Option 1: sign in with ClickUp (recommended)</h2>
-  <p>Add the URL with no token. Your client opens a browser window to sign in to ClickUp and pick a workspace. This unlocks every tool, including the ones served by ClickUp's official MCP.</p>
+  <p>Add the URL with no token. Your client opens a browser window to sign in to ClickUp and pick a workspace. You get ClickUp's official MCP tools. ClickUp's REST API doesn't accept that sign-in, so the REST tools also need a ClickUp REST app on this server or a personal token (<code>?token=pk_...</code>).</p>
   <p>Claude Code:</p>
   <pre><code>${escape(claudeCode)}</code></pre>
   <p>claude.ai and Claude Desktop: Settings → Connectors → Add custom connector, paste the URL.</p>

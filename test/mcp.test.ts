@@ -62,6 +62,8 @@ describe.each<Era>(['auto', 'legacy'])('MCP over streamable HTTP (%s negotiation
     expect(result.isError).toBeFalsy();
     expect(JSON.parse(text(result))).toEqual({ ok: true, path: '/api/v2/task/abc' });
     expect(clickupRequests.at(-1)!.headers.get('authorization')).toBe('pk_e2e');
+    // Personal tokens aren't probed for REST access.
+    expect(clickupRequests).toHaveLength(1);
     await client.close();
   });
 });
