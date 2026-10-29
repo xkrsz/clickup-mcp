@@ -173,4 +173,32 @@ describe('plain HTTP routes', () => {
     expect(response.status).toBe(204);
     expect(response.headers.get('access-control-allow-headers')).toContain('Mcp-Protocol-Version');
   });
+
+  it('rejects MCP request bodies over the size limit with 413', async () => {
+    const limit = 4 * 1024 * 1024;
+    const body = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'clickup_get_task', arguments: { task_id: 'x'.repeat(limit) } },
+    });
+    const headers = {
+      Authorization: 'Bearer pk_e2e',
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+    };
+    const declared = await call(`${ORIGIN}/mcp`, { method: 'POST', headers, body });
+    expect(declared.status).toBe(413);
+
+    // Without a Content-Length header the body is still bounded while it is read.
+    const stream = new Blob([body]).stream();
+    const streamed = await call(`${ORIGIN}/mcp`, {
+      method: 'POST',
+      headers,
+      body: stream,
+      duplex: 'half',
+    } as RequestInit);
+    expect(streamed.status).toBe(413);
+    await expect(streamed.text()).resolves.toContain('Payload Too Large');
+  });
 });
