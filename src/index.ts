@@ -6,9 +6,14 @@ import { toolsets } from './operations';
 import { configFromRequest, directToken } from './config';
 import { createServer, listTools, SERVER_VERSION } from './server';
 
+// Upper bound for a JSON-RPC request body; larger requests get 413 before any parsing.
+// Kept explicit (rather than relying on the SDK default) and sized for upload tools that take
+// `file_base64`: 4 MiB of JSON fits a ~3 MB attachment.
+const MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024;
+
 const mcp = createMcpHandler(
   ({ requestInfo, authInfo }) => createServer(configFromRequest(requestInfo!, authInfo?.extra?.grant as GrantProps | undefined)),
-  { onerror: (error) => console.error('mcp error', error.message) },
+  { onerror: (error) => console.error('mcp error', error.message), maxRequestBodySize: MAX_REQUEST_BODY_BYTES },
 );
 
 const CORS_HEADERS = {
